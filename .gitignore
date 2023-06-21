@@ -169,3 +169,5 @@ examples/Actividad_3_master_IA_SCA-Jennifer Rubio Duke.ipynb
 .idea/
 examples/PublicTwinNeuralNetworkRegression-main/
 examples/PublicGetMostOutOfTNNR-main/
+weights/
+rmses/
