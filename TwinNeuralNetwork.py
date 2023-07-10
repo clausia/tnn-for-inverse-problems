@@ -113,13 +113,11 @@ class TNNR:
                                                       monitor='val_loss', mode='min', verbose=self.verbosity)
         history = self.model.fit(self.generator_sym(self.x_train_single,
                                                     self.y_train_single,
-                                                    self.batch_size,
                                                     self.inverse_problem),
                                  steps_per_epoch=len(self.x_train_single) * 10 / self.batch_size,
                                  epochs=self.epochs,
                                  validation_data=self.generator_sym(self.x_val_single,
                                                                     self.y_val_single,
-                                                                    self.batch_size,
                                                                     self.inverse_problem),
                                  validation_steps=len(self.x_val_single) * 100 / self.batch_size,
                                  callbacks=[reduce_lr, early_stop, mcp_save], verbose=self.verbosity)
@@ -142,7 +140,9 @@ class TNNR:
 
     def generate_data_from_func(self):
 
-        x_full = np.random.sample([self.n, self.n_vars]) * 2 - 1
+        # x_full = np.random.sample([self.n, self.n_vars]) * 2 - 1
+        #x_full = np.random.sample([self.n, self.n_vars]) * 40 - 20
+        x_full = np.random.sample([self.n, self.n_vars]) * 20 - 10
         y_full = np.array([self.f(x) for x in x_full]).flatten()
 
         # split data
@@ -168,13 +168,12 @@ class TNNR:
         self.x_val_single, self.y_val_single = self.cn_transformer.transform(x_val_single, y_val_single)
         self.x_test_single, self.y_test_single = self.cn_transformer.transform(x_test_single, y_test_single)
 
-    @staticmethod
-    def generator_sym(x_data, y_data, batch_size, inverse_problem):
+    def generator_sym(self, x_data, y_data, inverse_problem):
 
         x_data = np.array(x_data)
         y_data = np.array(y_data)
 
-        batch_size_sym = batch_size // 2
+        batch_size_sym = self.batch_size // 2
 
         num_single_samples = x_data.shape[0]
         batches_per_sweep = num_single_samples / batch_size_sym
