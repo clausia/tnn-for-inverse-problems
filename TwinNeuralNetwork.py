@@ -25,7 +25,9 @@ class TNNR:
                  mdl_plot_file=None,
                  show_summary=True,
                  show_loss_plot=True,
-                 show_rmse=True):
+                 show_rmse=True,
+                 zero_F_training=False,
+                 zero_F_testing=False):
 
         # set the seed
         random.seed(seed)
@@ -41,6 +43,7 @@ class TNNR:
         self.n = n
         self.val_pct = val_pct
         self.test_pct = test_pct
+        self.train_pct = 1 - self.val_pct - self.test_pct
         self.learning_rate = learning_rate
         self.verbosity = verbosity
         self.neurons = neurons
@@ -50,10 +53,13 @@ class TNNR:
         self.show_summary = show_summary
         self.show_loss_plot = show_loss_plot
         self.show_rmse = show_rmse
+        self.zero_F_training = zero_F_training
+        self.zero_F_testing = zero_F_testing
 
         self.cn_transformer = CenterAndNorm()
 
         self.model = None
+        self.train_history = None
         self.x_train_single = None
         self.y_train_single = None
         self.x_val_single = None
@@ -93,7 +99,12 @@ class TNNR:
                                              name='output',
                                              kernel_regularizer=tf.keras.regularizers.l2(self.l2),
                                              activity_regularizer=tf.keras.regularizers.l2(self.l2))(merged_layer)
-        self.model = tf.keras.models.Model(inputs=[x_i, x_j], outputs=output_layer, name='TNNR')
+
+        if self.zero_F_training:
+            zero_F_output = tf.keras.layers.Lambda(lambda x: x * 0)(output_layer)
+            self.model = tf.keras.models.Model(inputs=[x_i, x_j], outputs=zero_F_output, name='TNNR')
+        else:
+            self.model = tf.keras.models.Model(inputs=[x_i, x_j], outputs=output_layer, name='TNNR')
 
         if self.show_summary:
             self.model.summary()
@@ -111,22 +122,14 @@ class TNNR:
                                                       verbose=self.verbosity)
         mcp_save = tf.keras.callbacks.ModelCheckpoint(self.mdl_wts_file + '.hdf5', save_best_only=True,
                                                       monitor='val_loss', mode='min', verbose=self.verbosity)
-        history = self.model.fit(self.generator_sym(self.x_train_single,
-                                                    self.y_train_single,
-                                                    self.inverse_problem),
-                                 steps_per_epoch=len(self.x_train_single) * 10 / self.batch_size,
-                                 epochs=self.epochs,
-                                 validation_data=self.generator_sym(self.x_val_single,
-                                                                    self.y_val_single,
-                                                                    self.inverse_problem),
-                                 validation_steps=len(self.x_val_single) * 100 / self.batch_size,
-                                 callbacks=[reduce_lr, early_stop, mcp_save], verbose=self.verbosity)
+
+        self.perform_fit(reduce_lr, early_stop, mcp_save)
 
         self.model.load_weights(self.mdl_wts_file + '.hdf5')
 
         # Plot training & test loss values
-        plt.plot(history.history['loss'], label='Train')
-        plt.plot(history.history['val_loss'], label='Val')
+        plt.plot(self.train_history.history['loss'], label='Train')
+        plt.plot(self.train_history.history['val_loss'], label='Val')
         plt.title('Model loss')
         plt.ylabel('Loss')
         plt.xlabel('Epoch')
@@ -138,10 +141,22 @@ class TNNR:
         else:
             plt.close()
 
+    def perform_fit(self, reduce_lr, early_stop, mcp_save):
+        self.train_history = self.model.fit(self.generator_sym(self.x_train_single,
+                                                               self.y_train_single,
+                                                               self.inverse_problem),
+                                            steps_per_epoch=len(self.x_train_single) * 10 / self.batch_size,
+                                            epochs=self.epochs,
+                                            validation_data=self.generator_sym(self.x_val_single,
+                                                                               self.y_val_single,
+                                                                               self.inverse_problem),
+                                            validation_steps=len(self.x_val_single) * 100 / self.batch_size,
+                                            callbacks=[reduce_lr, early_stop, mcp_save], verbose=self.verbosity)
+
     def generate_data_from_func(self):
 
         # x_full = np.random.sample([self.n, self.n_vars]) * 2 - 1
-        #x_full = np.random.sample([self.n, self.n_vars]) * 40 - 20
+        # x_full = np.random.sample([self.n, self.n_vars]) * 40 - 20
         x_full = np.random.sample([self.n, self.n_vars]) * 20 - 10
         y_full = np.array([self.f(x) for x in x_full]).flatten()
 
@@ -168,7 +183,7 @@ class TNNR:
         self.x_val_single, self.y_val_single = self.cn_transformer.transform(x_val_single, y_val_single)
         self.x_test_single, self.y_test_single = self.cn_transformer.transform(x_test_single, y_test_single)
 
-    def generator_sym(self, x_data, y_data, inverse_problem):
+    def generator_sym(self, x_data, y_data, inverse_problem, num_neighbors=0):
 
         x_data = np.array(x_data)
         y_data = np.array(y_data)
@@ -231,7 +246,12 @@ class TNNR:
             pair_b = np.array([self.x_test_single[i]] * len(self.x_train_single))
             diff_a = self.model.predict([pair_b, self.x_train_single], verbose=self.verbosity).flatten()
             diff_b = self.model.predict([self.x_train_single, pair_b], verbose=self.verbosity).flatten()
-            self.y_pred_test.append(np.average(0.5 * diff_a - 0.5 * diff_b + self.y_train_single, weights=None))
+
+            if self.zero_F_testing:
+                self.y_pred_test.append(self.y_train_single)
+            else:
+                self.y_pred_test.append(np.average(0.5 * diff_a - 0.5 * diff_b + self.y_train_single, weights=None))
+
             y_pred_r_test.append(np.average(-diff_b + self.y_train_single))
             y_pred_check_test.append(np.var(0.5 * diff_a + 0.5 * diff_b))
             y_median_test.append(np.median(diff_a + self.y_train_single))
@@ -262,7 +282,12 @@ class TNNR:
             pair_b = np.array([self.y_test_single[i]] * len(self.y_train_single))
             diff_a = self.model.predict([pair_b, self.y_train_single], verbose=self.verbosity).flatten()
             diff_b = self.model.predict([self.y_train_single, pair_b], verbose=self.verbosity).flatten()
-            self.x_pred_test.append(np.average(0.5 * diff_a - 0.5 * diff_b + self.x_train_single, weights=None))
+
+            if self.zero_F_testing:
+                self.x_pred_test.append(self.x_train_single)
+            else:
+                self.x_pred_test.append(np.average(0.5 * diff_a - 0.5 * diff_b + self.x_train_single, weights=None))
+
             x_mse_test.append((self.x_pred_test[i] - self.x_test_single[i]) ** 2)
 
         self.x_pred_test = self.cn_transformer.inverse_transform_x(np.array(self.x_pred_test))

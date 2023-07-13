@@ -5,10 +5,27 @@ import numpy as np
 
 class TNNR_NN(TNNR):
 
-    def __init__(self, *args, num_nn_train=2, num_nn_test=1, **kwargs):
+    def __init__(self, *args, num_nn_train=2, num_nn_test=1, radius_nn_predict=1, **kwargs):
         self.num_nn_train = num_nn_train
         self.num_nn_test = num_nn_test
+        self.radius_nn_predict = radius_nn_predict
         super(TNNR_NN, self).__init__(*args, **kwargs)
+
+    def perform_fit(self, reduce_lr, early_stop, mcp_save):
+        self.train_history = self.model.fit(self.generator_sym(self.x_train_single,
+                                                               self.y_train_single,
+                                                               self.inverse_problem,
+                                                               num_neighbors=self.num_nn_train),
+                                            steps_per_epoch=len(self.x_train_single) * 10 / self.batch_size,
+                                            epochs=self.epochs,
+                                            validation_data=self.generator_sym(self.x_val_single,
+                                                                               self.y_val_single,
+                                                                               self.inverse_problem,
+                                                                               num_neighbors=
+                                                                               int(self.num_nn_train * self.val_pct /
+                                                                                   self.train_pct)),
+                                            validation_steps=len(self.x_val_single) * 100 / self.batch_size,
+                                            callbacks=[reduce_lr, early_stop, mcp_save], verbose=self.verbosity)
 
     @staticmethod
     def get_nearest_neighbors(x_new, x_reference, num_neighbors):
@@ -16,12 +33,19 @@ class TNNR_NN(TNNR):
         neighbor_finder.fit(x_reference)
         return neighbor_finder.kneighbors(x_new, return_distance=False)
 
-    def generator_sym(self, x_data, y_data, inverse_problem):
+    @staticmethod
+    def get_nearest_neighbors_radius(x_new, x_reference, radius_neighbors):
+        neighbor_finder = NearestNeighbors(radius=radius_neighbors)
+        neighbor_finder.fit(x_reference)
+        return neighbor_finder.radius_neighbors(x_new, return_distance=False)
+
+    def generator_sym(self, x_data, y_data, inverse_problem, num_neighbors=0):
 
         x_data = np.array(x_data)
         y_data = np.array(y_data)
 
-        nn_indexes = self.get_nearest_neighbors(x_data, x_data, self.num_nn_train)
+        num_neighbors = np.max([2, int(num_neighbors)])
+        nn_indexes = self.get_nearest_neighbors(x_data, x_data, num_neighbors)
         [np.random.shuffle(x) for x in nn_indexes]
 
         batch_size_sym = self.batch_size // 2
@@ -32,7 +56,7 @@ class TNNR_NN(TNNR):
 
         perm1 = np.random.permutation(len(x_data))
 
-        i1, = np.random.choice(range(self.num_nn_train), 1, replace=False)
+        i1, = np.random.choice(range(num_neighbors), 1, replace=False)
 
         x1 = x_data[perm1]
         x2 = x_data[nn_indexes[perm1][:, i1]]
@@ -65,7 +89,7 @@ class TNNR_NN(TNNR):
 
                 perm1 = np.random.permutation(len(x_data))
 
-                i1, = np.random.choice(range(self.num_nn_train), 1, replace=False)
+                i1, = np.random.choice(range(num_neighbors), 1, replace=False)
 
                 [np.random.shuffle(x) for x in nn_indexes]
 
@@ -90,8 +114,12 @@ class TNNR_NN(TNNR):
             pair_b = np.array([self.x_test_single[i]] * self.num_nn_test)
             diff_a = self.model.predict([pair_b, self.x_train_single[nn_indexes[i]]], verbose=self.verbosity).flatten()
             diff_b = self.model.predict([self.x_train_single[nn_indexes[i]], pair_b], verbose=self.verbosity).flatten()
-            self.y_pred_test.append(np.average(0.5 * diff_a - 0.5 * diff_b + self.y_train_single[nn_indexes[i]],
-                                               weights=None))
+
+            if self.zero_F_testing:
+                self.y_pred_test.append(self.y_train_single[nn_indexes[i]])
+            else:
+                self.y_pred_test.append(np.average(0.5 * diff_a - 0.5 * diff_b + self.y_train_single[nn_indexes[i]],
+                                                   weights=None))
 
             y_pred_r_test.append(np.average(-diff_b + self.y_train_single[nn_indexes[i]]))
             y_pred_check_test.append(np.var(0.5 * diff_a + 0.5 * diff_b))
@@ -125,8 +153,13 @@ class TNNR_NN(TNNR):
             pair_b = np.array([self.y_test_single[i]] * self.num_nn_test)
             diff_a = self.model.predict([pair_b, self.y_train_single[nn_indexes[i]]], verbose=self.verbosity).flatten()
             diff_b = self.model.predict([self.y_train_single[nn_indexes[i]], pair_b], verbose=self.verbosity).flatten()
-            self.x_pred_test.append(np.average(0.5 * diff_a - 0.5 * diff_b + self.x_train_single[nn_indexes[i]],
-                                               weights=None))
+
+            if self.zero_F_testing:
+                self.x_pred_test.append(self.x_train_single[nn_indexes[i]])
+            else:
+                self.x_pred_test.append(np.average(0.5 * diff_a - 0.5 * diff_b + self.x_train_single[nn_indexes[i]],
+                                                   weights=None))
+
             x_mse_test.append((self.x_pred_test[i] - self.x_test_single[i]) ** 2)
 
         self.x_pred_test = self.cn_transformer.inverse_transform_x(np.array(self.x_pred_test))
@@ -139,3 +172,4 @@ class TNNR_NN(TNNR):
         self.rmse_test = np.average(x_mse_test) ** 0.5
         if self.show_rmse:
             print('Test RMSE:', self.rmse_test)
+
