@@ -26,6 +26,11 @@ class TNNR:
                  show_summary=True,
                  show_loss_plot=True,
                  show_rmse=True,
+                 range_data_gen=(-10, 10),
+                 noise_range_x=None,
+                 noise_range_y=None,
+                 noise_normal_x=None,
+                 noise_normal_y=None,
                  zero_F_training=False,
                  zero_F_testing=False):
 
@@ -53,6 +58,11 @@ class TNNR:
         self.show_summary = show_summary
         self.show_loss_plot = show_loss_plot
         self.show_rmse = show_rmse
+        self.range_data_gen = range_data_gen
+        self.noise_range_x = noise_range_x
+        self.noise_range_y = noise_range_y
+        self.noise_normal_x = noise_normal_x
+        self.noise_normal_y = noise_normal_y
         self.zero_F_training = zero_F_training
         self.zero_F_testing = zero_F_testing
 
@@ -157,8 +167,24 @@ class TNNR:
 
         # x_full = np.random.sample([self.n, self.n_vars]) * 2 - 1
         # x_full = np.random.sample([self.n, self.n_vars]) * 40 - 20
-        x_full = np.random.sample([self.n, self.n_vars]) * 20 - 10
+        # x_full = np.random.sample([self.n, self.n_vars]) * 20 - 10
+        x_full = ((self.range_data_gen[1] - self.range_data_gen[0]) *
+                  np.random.sample([self.n, self.n_vars])) + self.range_data_gen[0]
         y_full = np.array([self.f(x) for x in x_full]).flatten()
+
+        if self.noise_range_x is not None:
+            x_full = x_full + (
+                    (self.noise_range_x[1] - self.noise_range_x[0]) * np.random.sample(x_full.shape) +
+                    self.noise_range_x[0])
+        if self.noise_range_y is not None:
+            y_full = y_full + (
+                    (self.noise_range_y[1] - self.noise_range_y[0]) * np.random.sample(y_full.shape) +
+                    self.noise_range_y[0])
+
+        if self.noise_normal_x is not None:
+            x_full = x_full + np.random.normal(self.noise_normal_x[0], self.noise_normal_x[1], x_full.shape)
+        if self.noise_normal_y is not None:
+            y_full = y_full + np.random.normal(self.noise_normal_y[0], self.noise_normal_y[1], y_full.shape)
 
         # split data
         n_total = x_full.shape[0]
@@ -275,7 +301,9 @@ class TNNR:
 
     def test_model_inverse_problem(self):
         self.x_pred_test = []
+        self.y_pred_test = []
         x_mse_test = []
+        y_mse_test = []
 
         # for i in ProgressBar()(range(len(self.x_test_single))):
         for i in (range(len(self.y_test_single))):
@@ -289,9 +317,12 @@ class TNNR:
                 self.x_pred_test.append(np.average(0.5 * diff_a - 0.5 * diff_b + self.x_train_single, weights=None))
 
             x_mse_test.append((self.x_pred_test[i] - self.x_test_single[i]) ** 2)
+            y_mse_test.append((self.f(self.cn_transformer.inverse_transform_x(self.x_pred_test[i])) -
+                               self.f(self.cn_transformer.inverse_transform_x(self.x_test_single[i]))) ** 2)
 
         self.x_pred_test = self.cn_transformer.inverse_transform_x(np.array(self.x_pred_test))
         x_mse_test = np.array(x_mse_test) * self.cn_transformer.x_max ** 2
+        y_mse_test = np.average(y_mse_test) ** 0.5
         x_self_check_test = np.abs(np.array(
             self.model.predict(
                 [self.y_test_single, self.y_test_single],
@@ -299,7 +330,8 @@ class TNNR:
 
         self.rmse_test = np.average(x_mse_test) ** 0.5
         if self.show_rmse:
-            print('Test RMSE:', self.rmse_test)
+            print('Test RMSE (plain):          ', self.rmse_test)
+            print('Test RMSE (back to y-space):', np.average(y_mse_test) ** 0.5)
 
 
 class ANNR(TNNR):
@@ -326,13 +358,12 @@ class ANNR(TNNR):
         if self.show_summary:
             self.model.summary()
 
-    @staticmethod
-    def generator_sym(x_data, y_data, batch_size, inverse_problem):
+    def generator_sym(self, x_data, y_data, inverse_problem):
 
         x_data = np.array(x_data)
         y_data = np.array(y_data)
 
-        batch_size_sym = batch_size // 2
+        batch_size_sym = self.batch_size // 2
 
         num_single_samples = x_data.shape[0]
         batches_per_sweep = num_single_samples / batch_size_sym
@@ -395,8 +426,11 @@ class CenterAndNorm:
         self.x_mean = np.mean(x, axis=0)
         self.x_max = np.max(x - self.x_mean, axis=0)
 
-        self.y_mean = 0
-        self.y_max = 1
+        # self.y_mean = 0
+        # self.y_max = 1
+
+        self.y_mean = np.mean(y, axis=0)
+        self.y_max = np.max(y - self.y_mean, axis=0)
 
     def fit_x(self, x):
         self.x_mean = np.mean(x, axis=0)
